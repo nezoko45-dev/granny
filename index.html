@@ -1,129 +1,31 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Granny — House Hunt</title>
-<style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050505;color:#fff;font-family:Arial,sans-serif}canvas{display:block;width:100%;height:100%;background:#090909}#start{position:fixed;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#241b19,#050505 70%)}#card{width:min(560px,90vw);padding:34px;background:#16110f;border:1px solid #5b4439;border-radius:18px;text-align:center;box-shadow:0 20px 70px #000}h1{font-size:42px;margin:0 0 10px;letter-spacing:3px}p{color:#c9bdb7;line-height:1.5}.big{font-size:18px;color:#fff}button{border:0;border-radius:10px;padding:15px 28px;font-size:20px;font-weight:bold;cursor:pointer;background:#d6c0b6;color:#130e0c}button:hover{filter:brightness(1.15)}#hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 5px #000}#status{position:absolute;top:15px;left:18px;font-size:20px;font-weight:bold}#timer{position:absolute;top:45px;left:18px;font-size:15px}#help{position:absolute;bottom:15px;left:50%;transform:translateX(-50%);background:#000b;padding:9px 15px;border-radius:8px;white-space:nowrap;font-size:14px}#minimap{position:absolute;right:15px;top:15px;width:190px;height:150px;border:1px solid #79665c;background:#0009;border-radius:8px}</style>
-</head>
-<body>
-<div id="start"><div id="card"><h1>GRANNY</h1><p class="big">HOUSE HUNT</p><p>Granny listens for movement. Make noise and she will chase you for 11 seconds. If she loses you, she searches the house room by room.</p><p><b>W A S D</b> to move · <b>SHIFT</b> to run · <b>E</b> interact</p><button id="startBtn">ENTER THE HOUSE</button></div></div>
-<canvas id="game"></canvas><div id="hud"><div id="status">Ready</div><div id="timer"></div><div id="help">W A S D = MOVE · SHIFT = RUN · E = DOOR / CLOSET · R = RESTART</div><canvas id="minimap" width="190" height="150"></canvas></div>
-<script>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GRANNY - House Hunt</title><style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#080706;color:#fff;font-family:Arial,sans-serif}#game{display:block;width:100%;height:100%;image-rendering:auto}#menu{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#090706;z-index:5}#box{background:#19110e;border:2px solid #5b4035;padding:32px;text-align:center;border-radius:14px;max-width:560px}button{font-size:22px;padding:14px 28px;border:0;border-radius:8px;cursor:pointer}#hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 5px #000}#status{position:absolute;top:15px;left:18px;font-size:20px;font-weight:bold}#help{position:absolute;bottom:15px;left:50%;transform:translateX(-50%);background:#000b;padding:9px 14px;border-radius:8px;white-space:nowrap}#map{position:absolute;right:15px;top:15px;width:190px;height:150px;background:#000b;border:1px solid #755b4f}</style></head><body><canvas id="game"></canvas><div id="menu"><div id="box"><h1>GRANNY</h1><h2>HOUSE HUNT</h2><p>WASD moves you through the house. Granny hears you moving and chases for 11 seconds.</p><p><b>WASD</b> move · <b>SHIFT</b> run · <b>E</b> open doors / hide · <b>R</b> restart</p><button id="start">ENTER THE HOUSE</button></div></div><div id="hud"><div id="status">Ready</div><div id="help">W A S D = MOVE | SHIFT = RUN | E = INTERACT | R = RESTART</div><canvas id="map" width="190" height="150"></canvas></div><script>
 'use strict';
-const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
-const mini=document.getElementById('minimap'),mctx=mini.getContext('2d');
-let W=innerWidth,H=innerHeight,dpr=Math.min(devicePixelRatio||1,2);
-function resize(){W=innerWidth;H=innerHeight;canvas.width=W*dpr;canvas.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}addEventListener('resize',resize);resize();
-
-// A complete dependency-free house map. Every room has real collision walls.
-const TILE=48,COLS=35,ROWS=27;
-const map=Array.from({length:ROWS},()=>Array(COLS).fill(1));
-function room(x,y,w,h){for(let j=y;j<y+h;j++)for(let i=x;i<x+w;i++)if(i>0&&j>0&&i<COLS-1&&j<ROWS-1)map[j][i]=0}
-room(2,2,7,5);room(11,2,10,5);room(23,2,9,5);
-room(2,9,8,7);room(12,9,9,7);room(23,9,9,7);
-room(2,18,8,7);room(12,18,9,7);room(23,18,9,7);
-// Corridors joining the rooms.
-for(let x=9;x<23;x++)map[4][x]=0;for(let x=9;x<23;x++)map[12][x]=0;for(let x=9;x<23;x++)map[21][x]=0;
-for(let y=7;y<9;y++){map[y][5]=0;map[y][16]=0;map[y][27]=0}for(let y=16;y<18;y++){map[y][5]=0;map[y][16]=0;map[y][27]=0}
-const rooms=[
-{name:'Entrance',x:2,y:2,w:7,h:5},{name:'Foyer',x:11,y:2,w:10,h:5},{name:'Kitchen',x:23,y:2,w:9,h:5},
-{name:'Living Room',x:2,y:9,w:8,h:7},{name:'Dining Room',x:12,y:9,w:9,h:7},{name:'Library',x:23,y:9,w:9,h:7},
-{name:'Bedroom A',x:2,y:18,w:8,h:7},{name:'Bedroom B',x:12,y:18,w:9,h:7},{name:'Basement',x:23,y:18,w:9,h:7}
-];
-const doors=[
-{x:9,y:4,open:false},{x:22,y:4,open:false},{x:9,y:12,open:false},{x:11,y:12,open:false},{x:21,y:12,open:false},{x:22,y:12,open:false},
-{x:9,y:21,open:false},{x:11,y:21,open:false},{x:21,y:21,open:false},{x:22,y:21,open:false},
-{x:5,y:8,open:false},{x:16,y:8,open:false},{x:27,y:8,open:false},{x:5,y:17,open:false},{x:16,y:17,open:false},{x:27,y:17,open:false}
-];
-// Door tiles are walkable when open and blocked when closed.
-const doorAt=(tx,ty)=>doors.find(d=>d.x===tx&&d.y===ty);
-function blocked(tx,ty){if(tx<0||ty<0||tx>=COLS||ty>=ROWS)return true;const d=doorAt(tx,ty);if(d)return !d.open;return map[ty][tx]===1}
-
-const player={x:5.5*TILE,y:4.5*TILE,r:14,angle:0,speed:175,running:false,moving:false,hidden:false};
-const granny={x:16.5*TILE,y:12.5*TILE,r:17,speed:112,mode:'search',chaseUntil:0,path:[],pathIndex:0,searchRoom:0,targetRoom:0,lastSeen:0};
-let started=false,dead=false,last=performance.now(),keys=Object.create(null),noise=0,flash=0;
-
-// Keyboard input is handled directly and continuously; no pointer lock, modules or external libraries.
-addEventListener('keydown',e=>{keys[e.code]=true;if(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();if(e.code==='KeyE')interact();if(e.code==='KeyR')restart()},{passive:false});
-addEventListener('keyup',e=>{keys[e.code]=false});addEventListener('blur',()=>{keys=Object.create(null)});
-
-function solidAt(px,py,r=player.r){
- const minX=Math.floor((px-r)/TILE),maxX=Math.floor((px+r)/TILE),minY=Math.floor((py-r)/TILE),maxY=Math.floor((py+r)/TILE);
- for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++)if(blocked(x,y)){
-   const rx=x*TILE,ry=y*TILE,cx=Math.max(rx,Math.min(px,rx+TILE)),cy=Math.max(ry,Math.min(py,ry+TILE));
-   if((px-cx)**2+(py-cy)**2<r*r)return true;
- }return false;
-}
-function moveEntity(o,dx,dy){
- const nx=o.x+dx,ny=o.y+dy;
- if(!solidAt(nx,o.y,o.r))o.x=nx;
- if(!solidAt(o.x,ny,o.r))o.y=ny;
-}
-
-// Real A* pathfinding over the house's collision grid.
-function astar(sx,sy,gx,gy){
- const s={x:Math.floor(sx/TILE),y:Math.floor(sy/TILE)},g={x:Math.floor(gx/TILE),y:Math.floor(gy/TILE)};
- if(blocked(g.x,g.y))return [];
- const key=(x,y)=>x+','+y,open=[s],came=new Map(),cost=new Map([[key(s.x,s.y),0]]);
- const h=(x,y)=>Math.abs(x-g.x)+Math.abs(y-g.y);let guard=0;
- while(open.length&&guard++<5000){open.sort((a,b)=>(cost.get(key(a.x,a.y))+h(a.x,a.y))-(cost.get(key(b.x,b.y))+h(b.x,b.y)));const c=open.shift();
-  if(c.x===g.x&&c.y===g.y){const out=[c];let k=key(c.x,c.y);while(came.has(k)){const p=came.get(k);out.push(p);k=key(p.x,p.y)}return out.reverse()}
-  for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const x=c.x+dx,y=c.y+dy;if(blocked(x,y))continue;const nk=key(x,y),nc=cost.get(key(c.x,c.y))+1;if(!cost.has(nk)||nc<cost.get(nk)){cost.set(nk,nc);came.set(nk,c);if(!open.some(n=>n.x===x&&n.y===y))open.push({x,y})}}
- }return [];
-}
-function los(ax,ay,bx,by){const dx=bx-ax,dy=by-ay,len=Math.hypot(dx,dy),steps=Math.ceil(len/12);for(let i=1;i<steps;i++){const x=ax+dx*i/steps,y=ay+dy*i/steps;if(blocked(Math.floor(x/TILE),Math.floor(y/TILE)))return false}return true}
-
-function currentRoom(x,y){return rooms.find(r=>x>=r.x*TILE&&x<(r.x+r.w)*TILE&&y>=r.y*TILE&&y<(r.y+r.h)*TILE)?.name||'Hallway'}
-function nearestDoor(){let best=null,bd=70;for(const d of doors){const dist=Math.hypot(player.x-(d.x+.5)*TILE,player.y-(d.y+.5)*TILE);if(dist<bd){best=d;bd=dist}}return best}
-function interact(){if(!started||dead)return;const d=nearestDoor();if(d){d.open=!d.open;flash=1;document.getElementById('status').textContent=d.open?'Door opened':'Door closed';return}if(Math.hypot(player.x-granny.x,player.y-granny.y)<75){player.hidden=true;document.getElementById('status').textContent='You hide in the shadows...'}}
-function restart(){if(!started)return;player.x=5.5*TILE;player.y=4.5*TILE;player.hidden=false;dead=false;granny.x=16.5*TILE;granny.y=12.5*TILE;granny.mode='search';granny.path=[];granny.pathIndex=0;granny.searchRoom=0;granny.chaseUntil=0;noise=0;document.getElementById('status').textContent='Move quietly...';last=performance.now()}
-
-function updatePlayer(dt){
- if(dead)return;let x=0,y=0;if(keys.KeyW||keys.ArrowUp)y--;if(keys.KeyS||keys.ArrowDown)y++;if(keys.KeyA||keys.ArrowLeft)x--;if(keys.KeyD||keys.ArrowRight)x++;
- player.moving=x!==0||y!==0;player.running=!!(keys.ShiftLeft||keys.ShiftRight)&&player.moving;
- if(player.moving){const l=Math.hypot(x,y);x/=l;y/=l;const sp=player.speed*(player.running?1.65:1);moveEntity(player,x*sp*dt,y*sp*dt);player.angle=Math.atan2(y,x);noise=player.running?1:0.65;if(player.hidden)player.hidden=false}else noise=Math.max(0,noise-dt*3);
-}
-function beginChase(){granny.mode='chase';granny.chaseUntil=performance.now()+11000;granny.lastSeen=performance.now();granny.path=[];document.getElementById('status').textContent='GRANNY HEARD YOU! RUN!';flash=1}
-function updateGranny(dt){
- if(dead)return;const dist=Math.hypot(player.x-granny.x,player.y-granny.y),visible=!player.hidden&&dist<520&&los(granny.x,granny.y,player.x,player.y);
- if(player.moving&&noise>0&&dist<520&&(visible||dist<250)){if(granny.mode!=='chase')beginChase();granny.chaseUntil=performance.now()+11000}
- if(granny.mode==='chase'){
-  if(performance.now()>granny.chaseUntil){granny.mode='search';granny.path=[];granny.searchRoom=0;document.getElementById('status').textContent='Granny is searching...'}
-  else if(visible&&!player.hidden){granny.path=astar(granny.x,granny.y,player.x,player.y);granny.pathIndex=0}
-  followPath(dt,granny.speed*1.12);
- }else{
-  if(!granny.path.length||granny.pathIndex>=granny.path.length){const r=rooms[granny.searchRoom%rooms.length];granny.searchRoom++;granny.path=astar(granny.x,granny.y,(r.x+r.w/2)*TILE,(r.y+r.h/2)*TILE);granny.pathIndex=0}
-  followPath(dt,granny.speed*.72);
- }
- if(dist<34&&!player.hidden){dead=true;document.getElementById('status').textContent='GRANNY CAUGHT YOU! Press R to restart';flash=1}
-}
-function followPath(dt,speed){if(!granny.path.length)return;const p=granny.path[Math.min(granny.pathIndex,granny.path.length-1)];const tx=(p.x+.5)*TILE,ty=(p.y+.5)*TILE;let dx=tx-granny.x,dy=ty-granny.y,d=Math.hypot(dx,dy);if(d<8){granny.pathIndex++;return}dx/=d;dy/=d;moveEntity(granny,dx*speed*dt,dy*speed*dt)}
-
-function drawHouse(camX,camY){
- ctx.fillStyle='#080808';ctx.fillRect(0,0,W,H);
- const startX=Math.max(0,Math.floor(camX/TILE)-2),endX=Math.min(COLS,Math.ceil((camX+W)/TILE)+2),startY=Math.max(0,Math.floor(camY/TILE)-2),endY=Math.min(ROWS,Math.ceil((camY+H)/TILE)+2);
- for(let y=startY;y<endY;y++)for(let x=startX;x<endX;x++){const sx=x*TILE-camX,sy=y*TILE-camY;ctx.fillStyle=map[y][x]?'#342b28':'#171615';ctx.fillRect(sx,sy,TILE+1,TILE+1);if(map[y][x]){ctx.strokeStyle='#4b3c35';ctx.strokeRect(sx+.5,sy+.5,TILE-1,TILE-1)}}
- for(const d of doors){const sx=d.x*TILE-camX,sy=d.y*TILE-camY;ctx.fillStyle=d.open?'#80614c':'#633c2f';ctx.fillRect(sx+5,sy+5,TILE-10,TILE-10);ctx.fillStyle='#d6b28e';ctx.beginPath();ctx.arc(sx+TILE*.72,sy+TILE/2,3,0,Math.PI*2);ctx.fill()}
- for(const r of rooms){const cx=(r.x+r.w/2)*TILE-camX,cy=(r.y+r.h/2)*TILE-camY;ctx.fillStyle='#ffffff14';ctx.font='13px Arial';ctx.textAlign='center';ctx.fillText(r.name,cx,cy)}
-}
-function drawCharacter(o,camX,camY,color,face){const x=o.x-camX,y=o.y-camY;ctx.save();ctx.translate(x,y);ctx.fillStyle='#0008';ctx.beginPath();ctx.ellipse(0,12,20,9,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=color;ctx.beginPath();ctx.arc(0,0,o.r,0,Math.PI*2);ctx.fill();if(face){ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(Math.cos(o.angle)*8,Math.sin(o.angle)*8);ctx.lineTo(Math.cos(o.angle)*19,Math.sin(o.angle)*19);ctx.stroke()}ctx.restore()}
-function draw(){
- const camX=Math.max(0,Math.min(COLS*TILE-W,player.x-W/2)),camY=Math.max(0,Math.min(ROWS*TILE-H,player.y-H/2));drawHouse(camX,camY);
- // Darkness vignette / flashlight-like visibility.
- ctx.save();const gx=player.x-camX,gy=player.y-camY;const grad=ctx.createRadialGradient(gx,gy,100,gx,gy,430);grad.addColorStop(0,'#0000');grad.addColorStop(.65,'#0005');grad.addColorStop(1,'#000e');ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);ctx.restore();
- drawCharacter(granny,camX,camY,granny.mode==='chase'?'#b9aaa5':'#776a67',true);drawCharacter(player,camX,camY,player.hidden?'#34302e':'#9b9b9b',false);
- if(dead){ctx.fillStyle='#50000088';ctx.fillRect(0,0,W,H);ctx.fillStyle='#fff';ctx.font='bold 44px Arial';ctx.textAlign='center';ctx.fillText('CAUGHT',W/2,H/2)}
- if(flash>0){ctx.fillStyle='#fff';ctx.globalAlpha=flash*.25;ctx.fillRect(0,0,W,H);ctx.globalAlpha=1;flash=Math.max(0,flash-.05)}
- document.getElementById('timer').textContent=granny.mode==='chase'?`CHASE: ${Math.max(0,(granny.chaseUntil-performance.now())/1000).toFixed(1)}s · Room: ${currentRoom(player.x,player.y)}`:`Room: ${currentRoom(player.x,player.y)} · Granny: searching`;
- drawMini();
-}
-function drawMini(){mctx.fillStyle='#090909';mctx.fillRect(0,0,190,150);const sx=190/(COLS*TILE),sy=150/(ROWS*TILE);for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++){mctx.fillStyle=map[y][x]?'#493c37':'#171717';mctx.fillRect(x*TILE*sx,y*TILE*sy,TILE*sx+.5,TILE*sy+.5)}for(const d of doors){mctx.fillStyle=d.open?'#b18a6e':'#71483b';mctx.fillRect(d.x*TILE*sx,d.y*TILE*sy,TILE*sx,TILE*sy)}mctx.fillStyle='#ddd';mctx.beginPath();mctx.arc(player.x*sx,player.y*sy,3,0,7);mctx.fill();mctx.fillStyle='#c55';mctx.beginPath();mctx.arc(granny.x*sx,granny.y*sy,4,0,7);mctx.fill()}
-function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;if(started){updatePlayer(dt);updateGranny(dt);draw()}requestAnimationFrame(loop)}
-
-document.getElementById('startBtn').onclick=()=>{document.getElementById('start').style.display='none';started=true;restart();requestAnimationFrame(loop)};
-document.getElementById('status').textContent='Press ENTER THE HOUSE to begin';
-</script>
-</body>
-</html>
+/* PURE HTML CANVAS VERSION. ZERO EXTERNAL LIBRARIES. */
+const c=document.getElementById('game'),x=c.getContext('2d'),mm=document.getElementById('map'),mx=mm.getContext('2d'),status=document.getElementById('status');let W=0,H=0,dpr=1;
+function size(){dpr=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr;x.setTransform(dpr,0,0,dpr,0,0)}addEventListener('resize',size);size();
+const S=42,C=40,R=30,grid=Array.from({length:R},()=>Array(C).fill(1));
+function room(a,b,w,h){for(let j=b;j<b+h;j++)for(let i=a;i<a+w;i++)if(i>0&&j>0&&i<C-1&&j<R-1)grid[j][i]=0}
+room(2,2,8,7);room(14,2,10,7);room(28,2,9,7);room(2,12,10,7);room(14,12,10,7);room(28,12,9,7);room(2,22,10,6);room(14,22,10,6);room(28,22,9,6);
+for(let i=10;i<14;i++)grid[5][i]=0;for(let i=24;i<28;i++)grid[5][i]=0;for(let i=12;i<14;i++)grid[15][i]=0;for(let i=24;i<28;i++)grid[15][i]=0;for(let i=12;i<14;i++)grid[25][i]=0;for(let i=24;i<28;i++)grid[25][i]=0;for(let j=9;j<12;j++){grid[j][6]=0;grid[j][19]=0;grid[j][32]=0}for(let j=19;j<22;j++){grid[j][6]=0;grid[j][19]=0;grid[j][32]=0}
+const rooms=[['Entrance',2,2,8,7],['Foyer',14,2,10,7],['Kitchen',28,2,9,7],['Living',2,12,10,7],['Dining',14,12,10,7],['Library',28,12,9,7],['Bedroom A',2,22,10,6],['Bedroom B',14,22,10,6],['Basement',28,22,9,6]];
+const doors=[{a:10,b:5,o:0},{a:24,b:5,o:0},{a:12,b:15,o:0},{a:24,b:15,o:0},{a:12,b:25,o:0},{a:24,b:25,o:0},{a:6,b:9,o:0},{a:19,b:9,o:0},{a:32,b:9,o:0},{a:6,b:19,o:0},{a:19,b:19,o:0},{a:32,b:19,o:0}];
+function doorAt(a,b){return doors.find(d=>d.a===a&&d.b===b)}function blocked(a,b){if(a<0||b<0||a>=C||b>=R)return true;const d=doorAt(a,b);return d?!d.o:grid[b][a]===1}
+const p={px:6.5*S,py:5*S,r:12,speed:185,hidden:false,moving:false};const g={px:19*S,py:15*S,r:15,speed:118,mode:'search',until:0,path:[],pi:0,room:0};
+let keys=Object.create(null),playing=false,dead=false,last=performance.now(),noise=0;
+addEventListener('keydown',e=>{keys[e.code]=true;if(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();if(e.code==='KeyE')interact();if(e.code==='KeyR')reset()},{passive:false});addEventListener('keyup',e=>keys[e.code]=false);addEventListener('blur',()=>keys=Object.create(null));
+function hit(px,py,r){const l=Math.floor((px-r)/S),h=Math.floor((px+r)/S),t=Math.floor((py-r)/S),b=Math.floor((py+r)/S);for(let j=t;j<=b;j++)for(let i=l;i<=h;i++)if(blocked(i,j)){const qx=Math.max(i*S,Math.min(px,(i+1)*S)),qy=Math.max(j*S,Math.min(py,(j+1)*S));if((px-qx)**2+(py-qy)**2<r*r)return true}return false}
+function move(o,dx,dy){if(!hit(o.px+dx,o.py,o.r))o.px+=dx;if(!hit(o.px,o.py+dy,o.r))o.py+=dy}
+function astar(sx,sy,gx,gy){const s={a:Math.floor(sx/S),b:Math.floor(sy/S)},q={a:Math.floor(gx/S),b:Math.floor(gy/S)};if(blocked(q.a,q.b))return[];const k=(a,b)=>a+','+b,o=[s],came=new Map(),cost=new Map([[k(s.a,s.b),0]]),h=(a,b)=>Math.abs(a-q.a)+Math.abs(b-q.b);let guard=0;while(o.length&&guard++<6000){o.sort((u,v)=>(cost.get(k(u.a,u.b))+h(u.a,u.b))-(cost.get(k(v.a,v.b))+h(v.a,v.b)));const z=o.shift();if(z.a===q.a&&z.b===q.b){const out=[z];let zkey=k(z.a,z.b);while(came.has(zkey)){const old=came.get(zkey);out.push(old);zkey=k(old.a,old.b)}return out.reverse()}for(const [da,db] of [[1,0],[-1,0],[0,1],[0,-1]]){const a=z.a+da,b=z.b+db;if(blocked(a,b))continue;const nk=k(a,b),nc=cost.get(k(z.a,z.b))+1;if(!cost.has(nk)||nc<cost.get(nk)){cost.set(nk,nc);came.set(nk,z);if(!o.some(v=>v.a===a&&v.b===b))o.push({a,b})}}}return[]}
+function visible(){const dx=p.px-g.px,dy=p.py-g.py,d=Math.hypot(dx,dy);if(p.hidden||d>650)return false;for(let i=1;i<d;i+=10){const qx=g.px+dx*i/d,qy=g.py+dy*i/d;if(blocked(Math.floor(qx/S),Math.floor(qy/S)))return false}return true}
+function interact(){if(!playing||dead)return;let best=null,bd=75;for(const d of doors){const qx=(d.a+.5)*S,qy=(d.b+.5)*S,z=Math.hypot(p.px-qx,p.py-qy);if(z<bd){bd=z;best=d}}if(best){best.o=!best.o;status.textContent=best.o?'Door opened':'Door closed';return}if(Math.hypot(p.px-g.px,p.py-g.py)<110){p.hidden=true;status.textContent='You are hiding...'}}
+function reset(){p.px=6.5*S;p.py=5*S;p.hidden=false;dead=false;g.px=19*S;g.py=15*S;g.mode='search';g.path=[];g.pi=0;g.room=0;g.until=0;noise=0;status.textContent='Move quietly...';last=performance.now()}
+function player(dt){let a=0,b=0;if(keys.KeyW||keys.ArrowUp)b--;if(keys.KeyS||keys.ArrowDown)b++;if(keys.KeyA||keys.ArrowLeft)a--;if(keys.KeyD||keys.ArrowRight)a++;p.moving=!!(a||b);if(!p.moving){noise=Math.max(0,noise-dt*4);return}const l=Math.hypot(a,b);a/=l;b/=l;const run=keys.ShiftLeft||keys.ShiftRight,sp=p.speed*(run?1.7:1);move(p,a*sp*dt,b*sp*dt);p.hidden=false;noise=run?1:0.65}
+function chase(){g.mode='chase';g.until=performance.now()+11000;g.path=[];status.textContent='GRANNY HEARD YOU! RUN!'}
+function granny(dt){if(dead)return;const d=Math.hypot(p.px-g.px,p.py-g.py),see=visible();if(p.moving&&noise&&d<620&&(see||d<280)){if(g.mode!=='chase')chase();g.until=performance.now()+11000}if(g.mode==='chase'&&performance.now()>g.until){g.mode='search';g.path=[];g.room=0;status.textContent='Granny is searching...'}if(g.mode==='chase'&&see)g.path=astar(g.px,g.py,p.px,p.py),g.pi=0;if(g.mode==='search'&&(!g.path.length||g.pi>=g.path.length)){const r=rooms[g.room++%rooms.length];g.path=astar(g.px,g.py,(r[1]+r[3]/2)*S,(r[2]+r[4]/2)*S);g.pi=0}if(g.path.length){const n=g.path[Math.min(g.pi,g.path.length-1)],tx=(n.a+.5)*S,ty=(n.b+.5)*S,dx=tx-g.px,dy=ty-g.py,dd=Math.hypot(dx,dy);if(dd<9)g.pi++;else{const sp=g.speed*(g.mode==='chase'?1.15:.7);move(g,dx/dd*sp*dt,dy/dd*sp*dt)}}if(d<27&&!p.hidden){dead=true;status.textContent='GRANNY CAUGHT YOU! PRESS R';}}
+function draw(){const camX=p.px-W/2,camY=p.py-H/2;x.fillStyle='#080706';x.fillRect(0,0,W,H);const xa=Math.floor(camX/S)-2,xb=Math.ceil((camX+W)/S)+2,ya=Math.floor(camY/S)-2,yb=Math.ceil((camY+H)/S)+2;for(let j=ya;j<yb;j++)for(let i=xa;i<xb;i++){if(i<0||j<0||i>=C||j>=R)continue;const sx=i*S-camX,sy=j*S-camY;x.fillStyle=grid[j][i]?'#332a26':'#171514';x.fillRect(sx,sy,S+1,S+1);if(grid[j][i]){x.strokeStyle='#57443b';x.strokeRect(sx+.5,sy+.5,S-1,S-1)}}for(const d of doors){const sx=d.a*S-camX,sy=d.b*S-camY;x.fillStyle=d.o?'#80634e':'#633a2c';x.fillRect(sx+4,sy+4,S-8,S-8)}for(const r of rooms){x.fillStyle='#ffffff12';x.font='12px Arial';x.textAlign='center';x.fillText(r[0],(r[1]+r[3]/2)*S-camX,(r[2]+r[4]/2)*S-camY)}drawGuy(p,camX,camY,'#b8d6e8');if(!p.hidden)drawGuy(g,camX,camY,'#bfa0a0');if(dead){x.fillStyle='#9008';x.fillRect(0,0,W,H)}}
+function drawGuy(o,cx,cy,col){x.fillStyle='#0009';x.beginPath();x.arc(o.px-cx,o.py-cy,o.r+5,0,7);x.fill();x.fillStyle=col;x.beginPath();x.arc(o.px-cx,o.py-cy,o.r,0,7);x.fill();}
+function miniMap(){mx.clearRect(0,0,190,150);const sc=4;for(let j=0;j<R;j++)for(let i=0;i<C;i++){mx.fillStyle=grid[j][i]?'#302622':'#151312';mx.fillRect(i*sc,j*sc,sc,sc)}for(const d of doors){mx.fillStyle=d.o?'#99735a':'#57352b';mx.fillRect(d.a*sc,d.b*sc,sc,sc)}mx.fillStyle='#9cf';mx.fillRect(p.px/S*sc-3,p.py/S*sc-3,6,6);mx.fillStyle='#e55';mx.fillRect(g.px/S*sc-3,g.py/S*sc-3,6,6)}
+function loop(){const now=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;if(playing){player(dt);granny(dt)}draw();miniMap();requestAnimationFrame(loop)}
+document.getElementById('start').onclick=()=>{document.getElementById('menu').style.display='none';playing=true;reset()};loop();
+</script></body></html>
