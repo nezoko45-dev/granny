@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Granny — House Hunt</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#050505;color:#eee;font-family:Arial,sans-serif}canvas{display:block}#hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 5px #000}#top{position:absolute;left:18px;top:16px;font-size:15px;line-height:1.5}#status{font-size:18px;font-weight:bold}#hint{position:absolute;left:50%;bottom:25px;transform:translateX(-50%);background:#000b;padding:10px 16px;border-radius:8px;text-align:center}#cross{position:absolute;left:50%;top:50%;width:5px;height:5px;background:#fff;border-radius:50%;transform:translate(-50%,-50%)}#start{position:fixed;inset:0;display:grid;place-items:center;background:radial-gradient(circle,#241b1b,#030303);z-index:5}#panel{max-width:620px;padding:35px;text-align:center;background:#0d0b0bcc;border:1px solid #4b3a3a;border-radius:14px;box-shadow:0 20px 80px #000}button{font-size:18px;padding:12px 25px;border:0;border-radius:8px;cursor:pointer}h1{margin-top:0}.danger{color:#f66}.ok{color:#8f8}
+</style>
+</head>
+<body>
+<div id="start"><div id="panel"><h1>GRANNY: HOUSE HUNT</h1><p>Explore the huge house. Granny listens for movement.</p><p><b>WASD</b> move · <b>Mouse</b> look · <b>Shift</b> sprint · <b>E</b> open/close doors · <b>F</b> hide in a closet</p><p>If Granny sees you moving, she follows your last known position for <b>11 seconds</b>. If she loses sight, she searches rooms using A*.</p><button id="startBtn">ENTER THE HOUSE</button></div></div>
+<div id="hud"><div id="top"><div id="status">Quiet...</div><div id="room">Room: Hallway</div><div id="timer"></div></div><div id="cross">+</div><div id="hint">WASD to move</div></div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js';
+
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x080808); scene.fog=new THREE.FogExp2(0x080808,.035);
+const camera=new THREE.PerspectiveCamera(72,innerWidth/innerHeight,.05,180); camera.position.set(0,1.7,16);
+const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.shadowMap.enabled=true; document.body.appendChild(renderer.domElement);
+scene.add(new THREE.HemisphereLight(0x777777,0x161616,1.0));
+const moon=new THREE.DirectionalLight(0xcfcfff,1.1); moon.position.set(10,25,10); moon.castShadow=true; scene.add(moon);
+
+const colliders=[]; const rooms=[]; const doors=[]; const closets=[]; const nodes=[];
+const matWall=new THREE.MeshStandardMaterial({color:0x4b403b,roughness:.9});
+const matFloor=new THREE.MeshStandardMaterial({color:0x292522,roughness:1});
+const matDoor=new THREE.MeshStandardMaterial({color:0x2b1712,roughness:.9});
+const matTrim=new THREE.MeshStandardMaterial({color:0x5c4a3e});
+function box(name,x,y,z,w,h,d,mat=matWall,solid=true){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.name=name;m.position.set(x,y,z);m.castShadow=true;m.receiveShadow=true;scene.add(m);if(solid)colliders.push({mesh:m,w,h,d});return m}
+function floor(x,z,w,d){box('Floor',x,-.15,z,w,.3,d,matFloor,false)}
+function wall(x,z,w,d){box('Wall',x,2,z,w,4,d,matWall,true)}
+function addRoom(name,x,z,w,d){rooms.push({name,x,z,w,d,center:new THREE.Vector3(x,0,z),searched:false});floor(x,z,w,d)}
+
+// Large multi-room house: 3 floors represented as a sprawling ground floor plus upstairs balcony.
+const layout=[
+ ['Entrance',0,16,12,10],['Foyer',0,7,12,8],['Kitchen',-14,7,14,10],['Dining',14,7,14,10],
+ ['Living',-14,-5,18,12],['Library',14,-5,14,12],['Study',0,-7,10,8],['Hall',0,-16,12,10],
+ ['Bedroom A',-15,-17,14,10],['Bedroom B',15,-17,14,10],['Bathroom',-15,-28,10,8],['Closet Room',0,-27,10,8],['Bedroom C',15,-28,14,8],
+ ['Basement',0,-39,28,12],['Garage',-20,-39,12,12],['Storage',20,-39,12,12]
+];
+layout.forEach(r=>addRoom(...r));
+// Outer/inner walls. Door openings are intentionally left between rooms, then door meshes occupy them.
+function roomWalls(r){const {x,z,w,d}=r;wall(x-w/2,z,w,.5);wall(x+w/2,z,w,.5);wall(x,z-d/2,.5,d);wall(x,z+d/2,.5,d)}
+rooms.forEach(roomWalls);
+// Central connections / openings: remove the visual illusion with door objects that can open.
+function door(name,x,z,rot,roomA,roomB){const m=box(name,x,1.6,z,1,3.2,.18,matDoor,false);m.rotation.y=rot;doors.push({name,mesh:m,open:false,a:roomA,b:roomB});}
+door('Foyer-Kitchen',-6,7,Math.PI/2,'Foyer','Kitchen');door('Foyer-Dining',6,7,Math.PI/2,'Foyer','Dining');door('Foyer-Living',-6,3,Math.PI/2,'Foyer','Living');door('Foyer-Library',6,3,Math.PI/2,'Foyer','Library');door('Hall-Study',0,-12,0,'Hall','Study');door('Hall-BedA',-6,-16,Math.PI/2,'Hall','Bedroom A');door('Hall-BedB',6,-16,Math.PI/2,'Hall','Bedroom B');door('Hall-Bath',-10,-27,Math.PI/2,'Bedroom A','Bathroom');door('Hall-Closet',-5,-27,Math.PI/2,'Hall','Closet Room');door('Hall-BedC',7,-27,Math.PI/2,'Hall','Bedroom C');door('Basement',0,-34,0,'Hall','Basement');door('Garage',-14,-39,Math.PI/2,'Basement','Garage');door('Storage',14,-39,Math.PI/2,'Basement','Storage');
+// Decorative furniture / obstacles.
+function furniture(x,z,w,d,h=1.2){box('Furniture',x,h/2,z,w,h,d,matTrim,true)}
+furniture(-16,8,4,3,1.3);furniture(16,8,4,3,1.3);furniture(-17,-6,5,2,1.5);furniture(17,-5,3,5,1.4);furniture(-15,-18,4,2,1.3);furniture(15,-18,4,2,1.3);furniture(0,-40,7,2,1.3);furniture(20,-40,5,3,1.2);
+// Closets: trigger zones, rendered as tall cabinets.
+function closet(x,z,room){box('Closet',x,1.5,z,2.2,3,.7,matTrim,true);closets.push({x,z,room,occupied:false})}
+closet(-18,-2,'Living');closet(18,-2,'Library');closet(-18,-20,'Bedroom A');closet(18,-20,'Bedroom B');closet(2,-29,'Closet Room');closet(20,-29,'Bedroom C');
+
+// A* navigation grid over the house. Walls/furniture become blocked cells.
+const cell=1.5, minX=-27,maxX=27,minZ=-46,maxZ=22, cols=Math.ceil((maxX-minX)/cell), rows=Math.ceil((maxZ-minZ)/cell);
+for(let z=0;z<rows;z++)for(let x=0;x<cols;x++)nodes.push({x,z,blocked:false});
+function worldToNode(p){return {x:Math.max(0,Math.min(cols-1,Math.floor((p.x-minX)/cell))),z:Math.max(0,Math.min(rows-1,Math.floor((p.z-minZ)/cell)))} }
+function nodeToWorld(n){return new THREE.Vector3(minX+(n.x+.5)*cell,0,minZ+(n.z+.5)*cell)}
+function blockedAt(x,z){const p=nodeToWorld({x,z}); for(const c of colliders){const q=c.mesh.position; if(Math.abs(p.x-q.x)<c.w/2+.35&&Math.abs(p.z-q.z)<c.d/2+.35)return true} for(const d of doors)if(!d.open&&Math.abs(p.x-d.mesh.position.x)<1&&Math.abs(p.z-d.mesh.position.z)<1)return true;return false}
+nodes.forEach(n=>n.blocked=blockedAt(n.x,n.z));
+function astar(start,end){const s=worldToNode(start),g=worldToNode(end),key=n=>n.x+','+n.z, open=[s], came=new Map(), gs=new Map([[key(s),0]]), fs=new Map([[key(s),Math.abs(s.x-g.x)+Math.abs(s.z-g.z)]]);const neigh=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]];while(open.length){open.sort((a,b)=>(fs.get(key(a))??1e9)-(fs.get(key(b))??1e9));const cur=open.shift();if(cur.x===g.x&&cur.z===g.z){const path=[cur];let k=key(cur);while(came.has(k)){const p=came.get(k);path.push(p);k=key(p)}return path.reverse().map(nodeToWorld)}for(const [dx,dz] of neigh){const nx=cur.x+dx,nz=cur.z+dz;if(nx<0||nz<0||nx>=cols||nz>=rows)continue;const nn=nodes[nz*cols+nx];if(nn.blocked)continue;const nk=key(nn),tent=(gs.get(key(cur))??1e9)+(dx&&dz?1.414:1);if(tent<(gs.get(nk)??1e9)){came.set(nk,cur);gs.set(nk,tent);fs.set(nk,tent+Math.abs(nx-g.x)+Math.abs(nz-g.z));if(!open.some(v=>v.x===nx&&v.z===nz))open.push({x:nx,z:nz})}}}return []}
+
+// Player
+const player={vel:new THREE.Vector3(),yaw:0,pitch:0,lastMove:new THREE.Vector3(),moving:false,hiding:false};
+const keys={};addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='KeyF')toggleHide();if(e.code==='KeyE')toggleDoor()});addEventListener('keyup',e=>keys[e.code]=false);
+addEventListener('mousemove',e=>{if(document.pointerLockElement===renderer.domElement&&!player.hiding){player.yaw-=e.movementX*.002;player.pitch-=e.movementY*.002;player.pitch=Math.max(-1.45,Math.min(1.45,player.pitch))}});
+function toggleHide(){let best=null,bd=2.5;for(const c of closets){const d=Math.hypot(camera.position.x-c.x,camera.position.z-c.z);if(d<bd){best=c;bd=d}}if(best){player.hiding=!player.hiding;player.hiding?player.hidingCloset=best:null;hint(player.hiding?'Hidden in closet':'You leave the closet');}}
+function toggleDoor(){let best=null,bd=2.2;for(const d of doors){const q=d.mesh.position;const dist=Math.hypot(camera.position.x-q.x,camera.position.z-q.z);if(dist<bd){best=d;bd=dist}}if(best){best.open=!best.open;best.mesh.rotation.y=best.open?best.mesh.rotation.y+Math.PI/2:best.mesh.rotation.y-Math.PI/2;nodes.forEach(n=>n.blocked=blockedAt(n.x,n.z));hint(best.open?'Door opened':'Door closed')}}
+function hint(t){document.getElementById('hint').textContent=t;clearTimeout(hint.t);hint.t=setTimeout(()=>document.getElementById('hint').textContent='WASD to move · E doors · F closets',2400)}
+
+// Granny character: stylized procedural body so the repo needs no external assets.
+const granny=new THREE.Group();
+const skin=new THREE.MeshStandardMaterial({color:0xd7b4a2});const dress=new THREE.MeshStandardMaterial({color:0x3b3434});const hair=new THREE.MeshStandardMaterial({color:0x332b2b});
+function part(g,geo,mat,pos){const m=new THREE.Mesh(geo,mat);m.position.copy(pos);m.castShadow=true;g.add(m);return m}
+part(granny,new THREE.CapsuleGeometry(.42,1.0,5,10),dress,new THREE.Vector3(0,1.05,0));part(granny,new THREE.SphereGeometry(.38,12,10),skin,new THREE.Vector3(0,1.95,0));part(granny,new THREE.SphereGeometry(.4,12,8),hair,new THREE.Vector3(0,2.18,-.02));part(granny,new THREE.CylinderGeometry(.07,.07,.9,8),skin,new THREE.Vector3(-.52,1.15,0));part(granny,new THREE.CylinderGeometry(.07,.07,.9,8),skin,new THREE.Vector3(.52,1.15,0));part(granny,new THREE.CylinderGeometry(.12,.12,.75,8),dress,new THREE.Vector3(-.22,.25,0));part(granny,new THREE.CylinderGeometry(.12,.12,.75,8),dress,new THREE.Vector3(.22,.25,0));granny.position.set(0,0,20);scene.add(granny);
+
+const ai={state:'idle',target:null,path:[],pathIndex:0,followUntil:0,lastKnown:new THREE.Vector3(),searchQueue:[],searchIndex:0,repath:0};
+function los(from,to){const a=from.clone();a.y=1.6;const b=to.clone();b.y=1.4;const dir=b.clone().sub(a);const len=dir.length();dir.normalize();const ray=new THREE.Raycaster(a,dir,0,len);const hits=ray.intersectObjects(scene.children,true).filter(o=>o!==granny&&o.parent!==granny);return hits.length===0}
+function playerMoved(){return camera.position.distanceTo(player.lastMove)>.045}
+function visibleAndMoving(){if(player.hiding)return false;const d=granny.position.distanceTo(camera.position);if(d>32)return false;const toP=camera.position.clone().sub(granny.position).normalize();const facing=new THREE.Vector3(0,0,-1).applyQuaternion(granny.quaternion);const fov=facing.dot(toP)>.15;return fov&&los(granny.position,camera.position)&&playerMoved()}
+function roomAt(p){return rooms.find(r=>Math.abs(p.x-r.x)<r.w/2&&Math.abs(p.z-r.z)<r.d/2)?.name||'Hallway'}
+function beginSearch(){ai.state='search';ai.searchQueue=rooms.map(r=>r.center.clone()).sort((a,b)=>a.distanceTo(granny.position)-b.distanceTo(granny.position));ai.searchIndex=0;ai.path=[];ai.pathIndex=0;rooms.forEach(r=>r.searched=false);status('Granny lost you. She is checking the rooms...')}
+function setPath(target){ai.path=astar(granny.position,target);ai.pathIndex=0;ai.target=target.clone()}
+function moveAI(dt){if(ai.state==='idle'){if(visibleAndMoving()){ai.state='chase';ai.followUntil=performance.now()+11000;ai.lastKnown.copy(camera.position);status('GRANNY HEARD YOU! RUN!');}return}
+ if(ai.state==='chase'){if(visibleAndMoving()){ai.lastKnown.copy(camera.position);ai.followUntil=performance.now()+11000} if(performance.now()>ai.followUntil){beginSearch();return} if(!ai.target||ai.target.distanceTo(ai.lastKnown)>1.5||ai.pathIndex>=ai.path.length){setPath(ai.lastKnown)} speedToward(dt,3.8);return}
+ if(ai.state==='search'){if(visibleAndMoving()){ai.state='chase';ai.followUntil=performance.now()+11000;ai.lastKnown.copy(camera.position);return}if(ai.pathIndex>=ai.path.length){if(ai.searchIndex>=ai.searchQueue.length){ai.state='idle';status('Granny is listening again...');return}const target=ai.searchQueue[ai.searchIndex++];ai.path=astar(granny.position,target);ai.pathIndex=0;return}speedToward(dt,2.7)}}
+function speedToward(dt,speed){const p=ai.path[ai.pathIndex];if(!p)return;const dir=p.clone().sub(granny.position);dir.y=0;const dist=dir.length();if(dist<.35){ai.pathIndex++;return}dir.normalize();granny.position.addScaledVector(dir,speed*dt);granny.lookAt(granny.position.x+dir.x,granny.position.y+1,granny.position.z+dir.z)}
+function status(t){document.getElementById('status').textContent=t}
+
+function updatePlayer(dt){if(player.hiding)return;const dir=new THREE.Vector3();if(keys.KeyW)dir.z-=1;if(keys.KeyS)dir.z+=1;if(keys.KeyA)dir.x-=1;if(keys.KeyD)dir.x+=1;const moving=dir.lengthSq()>0;player.moving=moving;if(moving){dir.normalize();dir.applyAxisAngle(new THREE.Vector3(0,1,0),player.yaw);const speed=keys.ShiftLeft||keys.ShiftRight?5.4:3.2;const next=camera.position.clone().addScaledVector(dir,speed*dt);if(!isColliding(next)){camera.position.copy(next)}}camera.rotation.order='YXZ';camera.rotation.y=player.yaw;camera.rotation.x=player.pitch;if(moving)player.lastMove.copy(camera.position)}
+function isColliding(p){for(const c of colliders){const q=c.mesh.position;if(Math.abs(p.x-q.x)<c.w/2+.28&&Math.abs(p.z-q.z)<c.d/2+.28&&p.y<c.h+.2)return true}for(const d of doors)if(!d.open&&Math.abs(p.x-d.mesh.position.x)<.7&&Math.abs(p.z-d.mesh.position.z)<.7)return true;return false}
+function updateHUD(){document.getElementById('room').textContent='Room: '+roomAt(camera.position);if(ai.state==='chase'){const left=Math.max(0,(ai.followUntil-performance.now())/1000);document.getElementById('timer').textContent='Chasing: '+left.toFixed(1)+'s'}else document.getElementById('timer').textContent='A* state: '+ai.state}
+
+let last=performance.now();function loop(){requestAnimationFrame(loop);const now=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;updatePlayer(dt);moveAI(dt);updateHUD();if(granny.position.distanceTo(camera.position)<1.25&&!player.hiding){status('GRANNY CAUGHT YOU! Refresh to try again.');player.hiding=true}renderer.render(scene,camera)}
+
+// Start and camera spawn.
+document.getElementById('startBtn').onclick=()=>{document.getElementById('start').style.display='none';renderer.domElement.requestPointerLock();player.lastMove.copy(camera.position);hint('Listen carefully... Granny is somewhere in the house.');loop()};
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+</script></body></html>
