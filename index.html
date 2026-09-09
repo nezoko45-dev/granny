@@ -26,7 +26,59 @@ function randomRoamTarget(){for(let i=0;i<80;i++){const x=THREE.MathUtils.randFl
 let grannyWalkTime=0;
 function animateGrannyWalking(moving,dt){if(moving){grannyWalkTime+=dt*7;const swing=Math.sin(grannyWalkTime)*.55;armL.rotation.x=swing;armR.rotation.x=-swing;legL.rotation.x=-swing*.75;legR.rotation.x=swing*.75;body.rotation.z=Math.sin(grannyWalkTime*2)*.025;granny.position.y=Math.abs(Math.sin(grannyWalkTime*2))*.025}else{armL.rotation.x=THREE.MathUtils.lerp(armL.rotation.x,0,.18);armR.rotation.x=THREE.MathUtils.lerp(armR.rotation.x,0,.18);legL.rotation.x=THREE.MathUtils.lerp(legL.rotation.x,0,.18);legR.rotation.x=THREE.MathUtils.lerp(legR.rotation.x,0,.18);body.rotation.z=THREE.MathUtils.lerp(body.rotation.z,0,.18);granny.position.y=THREE.MathUtils.lerp(granny.position.y,0,.18)}}
 function moveToward(t,dt,speed){const dx=t.x-granny.position.x,dz=t.z-granny.position.z,l=Math.hypot(dx,dz);if(l<.4){animateGrannyWalking(false,dt);return true}granny.position.x+=dx/l*speed*dt;granny.position.z+=dz/l*speed*dt;granny.rotation.y=Math.atan2(dx,dz);animateGrannyWalking(true,dt);return false}
-function ai(dt){if(!isHost)return;if(player.hidden){chasing=false;roaming=true;chaseLeft=0}const d=distance();if(!player.hidden&&(hear()||(!chasing&&d<42&&lineOfSight()))){chasing=true;roaming=false;chaseLeft=11;lastTarget.set(camera.position.x,0,camera.position.z);path=[];pathIndex=0;pathClock=0}if(chasing){chaseLeft=Math.max(0,chaseLeft-dt);if(chaseLeft<=0){chasing=false;roaming=true;path=[];pathIndex=0;randomRoamTarget()}else{pathClock-=dt;if(pathClock<=0){lastTarget.set(camera.position.x,0,camera.position.z);path=astar(granny.position,lastTarget);pathIndex=1;pathClock=.45}const t=path[pathIndex];if(t&&moveToward(new THREE.Vector3(t.x,0,t.z),dt,4.2))pathIndex++}}else if(roaming){if(Math.hypot(roamTarget.x-granny.position.x,roamTarget.z-granny.position.z)<.5)randomRoamTarget();else moveToward(roamTarget,dt,2.2)}else animateGrannyWalking(false,dt);if(d<1.25){player.gameOver=true;chasing=false;roaming=false;setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000)}sendAll({type:'granny',x:granny.position.x,z:granny.position.z,chasing,roaming,timer:chaseLeft})}
+function ai(dt){
+  if(!isHost||!started)return;
+  const d=distance();
+  const sees=lineOfSight();
+  const hears=hear();
+  if((sees||hears)&&!player.hidden){chasing=true;chaseLeft=11;}
+  if(chasing){chaseLeft-=dt;if(chaseLeft<=0){chasing=false;roaming=true;randomRoamTarget();}}
+
+  // Granny follows a sampled destination, not the player's current
+  // lateral velocity. This prevents A/D strafing from being copied.
+  if(!granny.userData.chaseTarget)granny.userData.chaseTarget=new THREE.Vector3();
+  if(granny.userData.targetClock===undefined)granny.userData.targetClock=0;
+  const target=granny.userData.chaseTarget;
+  if(!chasing){
+    if(!roaming||Math.hypot(granny.position.x-roamTarget.x,granny.position.z-roamTarget.z)<.7){roaming=true;randomRoamTarget();}
+    target.copy(roamTarget);
+    granny.userData.targetClock=0;
+  }else{
+    granny.userData.targetClock-=dt;
+    if(granny.userData.targetClock<=0){
+      target.set(camera.position.x,0,camera.position.z);
+      granny.userData.targetClock=.7;
+    }
+  }
+
+  pathClock-=dt;
+  if(pathClock<=0||!path.length||pathIndex>=path.length){
+    path=astar(granny.position,target);
+    pathIndex=0;
+    pathClock=.35;
+  }
+  const node=path[pathIndex];
+  if(node){
+    const dx=node.x-granny.position.x,dz=node.z-granny.position.z,len=Math.hypot(dx,dz);
+    if(len<.45)pathIndex++;
+    else{
+      const speed=chasing?4.2:1.65;
+      granny.position.x+=dx/len*speed*dt;
+      granny.position.z+=dz/len*speed*dt;
+      granny.rotation.y=Math.atan2(dx,dz);
+      animateGrannyWalking(true,dt);
+    }
+  }else animateGrannyWalking(false,dt);
+
+  if(d<1.25&&!player.hidden&&!player.gameOver){
+    player.gameOver=true;
+    chasing=false;
+    roaming=true;
+    randomRoamTarget();
+    setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000);
+  }
+  sendAll({type:'granny',x:granny.position.x,z:granny.position.z,chasing,roaming,timer:chaseLeft});
+}
 function respawnPlayer(){camera.position.set(0,1.7,18);camera.rotation.set(0,0,0);player.hidden=false;player.gameOver=false;chasing=false;chaseLeft=0;path=[];pathIndex=0;lastMove=performance.now();started=true;renderer.domElement.requestPointerLock();if(peer&&peer.open&&!isHost)sendAll({type:'data',data:{type:'respawn'}})}
 function restart(){respawnPlayer()}
 const status=document.getElementById('status'),timer=document.getElementById('timer');let last=performance.now(),netClock=0;function loop(now){requestAnimationFrame(loop);const dt=Math.min(.05,(now-last)/1000);last=now;movePlayer(dt);ai(dt);netClock+=dt;if(netClock>.08){netClock=0;if(peer&&!isHost&&peer.open)sendAll({type:'pos',id:peer.id,x:camera.position.x,z:camera.position.z})}const activeChase=isHost?chasing:remoteState.chasing,activeRoam=isHost?roaming:remoteState.roaming,activeTimer=isHost?chaseLeft:remoteState.timer;status.textContent=player.gameOver?'CAUGHT!':player.hidden?'HIDDEN':activeChase?'GRANNY IS CHASING YOU!':activeRoam?'GRANNY IS ROAMING':'QUIET';timer.textContent=activeChase?activeTimer.toFixed(1)+'s':' ';playersEl.textContent='PLAYERS: '+(remotes.size+1);renderer.render(scene,camera)}requestAnimationFrame(loop);
