@@ -1,39 +1,100 @@
-name: Add player respawn
+name: Fix player respawn
+
 on:
   push:
     branches: [main]
+
 permissions:
   contents: write
+
 jobs:
   respawn:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch Granny for respawning
+
+      - name: Patch respawn safely
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('index.html')
-          s=p.read_text()
-          old="function restart(){camera.position.set(0,1.7,18);camera.rotation.set(0,0,0);if(isHost){granny.position.set(0,0,-24);roaming=true;randomRoamTarget()}player.hidden=false;player.gameOver=false;chasing=false;chaseLeft=0;path=[];pathIndex=0;lastMove=0;started=true;renderer.domElement.requestPointerLock();if(isHost)sendAll({type:'granny',x:0,z:-24,chasing:false,roaming:true,timer:0})}"
-          new="function respawnPlayer(){camera.position.set(0,1.7,18);camera.rotation.set(0,0,0);player.hidden=false;player.gameOver=false;chasing=false;chaseLeft=0;path=[];pathIndex=0;lastMove=performance.now();started=true;renderer.domElement.requestPointerLock();if(peer&&peer.open&&!isHost)sendAll({type:'data',data:{type:'respawn'}})}\nfunction restart(){respawnPlayer()}"
-          if old in s:
-              s=s.replace(old,new)
-          else:
-              raise SystemExit('restart function not found')
-          old2="if(d<1.25){player.gameOver=true;chasing=false;roaming=false}"
-          new2="if(d<1.25){player.gameOver=true;chasing=false;roaming=false;setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000)}"
-          if old2 in s:
-              s=s.replace(old2,new2)
-          else:
-              raise SystemExit('catch block not found')
-          p.write_text(s)
+          import re
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          # Remove the broken external-script injection from the earlier Granny fix.
+          bad = '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js">'
+          marker = 'function grannyMovementStrafeFix(){}'
+          if bad in s and marker in s:
+              start = s.index(bad)
+              end = s.index('</script>', start) + len('</script>')
+              s = s[:start] + '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>' + s[end:]
+
+          # Add a real respawn function inside the module script.
+          respawn = '''function respawnPlayer(){
+            camera.position.set(0,1.7,18);
+            camera.rotation.set(0,0,0);
+            player.hidden=false;
+            player.gameOver=false;
+            chasing=false;
+            chaseLeft=0;
+            path=[];
+            pathIndex=0;
+            pathClock=0;
+            lastMove=performance.now();
+            started=true;
+            if(isHost){
+              roaming=true;
+              randomRoamTarget();
+            }
+            renderer.domElement.requestPointerLock();
+            if(peer&&peer.open&&!isHost) sendAll({type:'respawn'});
+          }
+          function restart(){ respawnPlayer(); }
+          '''
+
+          if 'function respawnPlayer()' not in s:
+              anchor = "document.addEventListener('keydown'"
+              pos = s.find(anchor)
+              if pos < 0:
+                  raise SystemExit('Could not find module input handler')
+              s = s[:pos] + respawn + s[pos:]
+          elif 'function restart(){' not in s:
+              s = s.replace('function respawnPlayer(){', respawn, 1)
+
+          # Replace any old catch block, regardless of its exact whitespace/minification.
+          catch_re = re.compile(r'if\(d<1\.25\)[^{]*\{[^{}]*player\.gameOver=true;[^{}]*\}', re.S)
+          def catch_replace(m):
+              return "if(d<1.25&&!player.hidden&&!player.gameOver){player.gameOver=true;chasing=false;roaming=true;randomRoamTarget();setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000)}"
+          s, n = catch_re.subn(catch_replace, s, count=1)
+
+          # If the catch block is already the new form, leave it alone.
+          if n == 0 and 'setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000)' not in s:
+              print('Warning: catch block was not found; respawn function was still added.')
+
+          # Validate the actual file before committing.
+          if 'function respawnPlayer()' not in s:
+              raise SystemExit('respawn function was not inserted')
+          if 'function restart(){' not in s:
+              raise SystemExit('restart function was not inserted')
+          if marker in s:
+              raise SystemExit('old broken Granny script injection still exists')
+          if s.count('function restart(){') != 1:
+              raise SystemExit('restart function count is not exactly 1')
+
+          p.write_text(s, encoding='utf-8')
+          print('Respawn patch validated successfully')
           PY
+
       - name: Commit respawn changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
-          git diff --cached --quiet || git commit -m 'Add automatic player respawn'
+          if git diff --cached --quiet; then
+            echo 'No changes needed'
+            exit 0
+          fi
+          git commit -m 'Fix player respawn and restart function'
           git push
