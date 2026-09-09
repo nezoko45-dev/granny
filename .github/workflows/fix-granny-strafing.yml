@@ -1,0 +1,39 @@
+name: Fix Granny strafing
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Granny AI
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          marker='function grannyMovementStrafeFix(){}'
+          if marker in s:
+              print('Patch already present')
+              raise SystemExit(0)
+          patch=r'''\n// Granny movement fix: use sampled chase targets instead of mirroring the player's strafe every frame.\nlet grannyChaseTarget=new THREE.Vector3();\nlet grannyTargetSampleClock=0;\nfunction grannyMovementStrafeFix(){}\nfunction ai(dt){\n  if(!isHost||!started)return;\n  const now=performance.now();\n  const d=distance();\n  const sees=lineOfSight();\n  const hears=hear();\n  if((sees||hears)&&!player.hidden){\n    chasing=true;\n    chaseLeft=11;\n  }\n  if(chasing){\n    chaseLeft-=dt;\n    if(chaseLeft<=0){\n      chasing=false;\n      roaming=true;\n      randomRoamTarget();\n    }\n  }\n  if(!chasing){\n    if(!roaming||Math.hypot(granny.position.x-roamTarget.x,granny.position.z-roamTarget.z)<.7){\n      roaming=true;\n      randomRoamTarget();\n    }\n    grannyChaseTarget.copy(roamTarget);\n  }else{\n    grannyTargetSampleClock-=dt;\n    const movedEnough=Math.hypot(camera.position.x-grannyChaseTarget.x,camera.position.z-grannyChaseTarget.z)>1.75;\n    if(grannyTargetSampleClock<=0||movedEnough){\n      grannyChaseTarget.set(camera.position.x,0,camera.position.z);\n      grannyTargetSampleClock=.55;\n    }\n  }\n  pathClock-=dt;\n  if(pathClock<=0||!path.length||pathIndex>=path.length){\n    path=astar(granny.position,grannyChaseTarget);\n    pathIndex=0;\n    pathClock=.35;\n  }\n  const node=path[pathIndex];\n  if(node){\n    const dx=node.x-granny.position.x,dz=node.z-granny.position.z,len=Math.hypot(dx,dz);\n    if(len<.45){\n      pathIndex++;\n    }else{\n      const speed=chasing?4.2:1.65;\n      granny.position.x+=dx/len*speed*dt;\n      granny.position.z+=dz/len*speed*dt;\n      granny.rotation.y=Math.atan2(dx,dz);\n      animateGrannyWalking(true,dt);\n    }\n  }else{\n    animateGrannyWalking(false,dt);\n  }\n  if(d<1.25&&!player.hidden&&!player.gameOver){\n    player.gameOver=true;\n    chasing=false;\n    roaming=true;\n    randomRoamTarget();\n    setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000);\n  }\n  sendAll({type:'granny',x:granny.position.x,z:granny.position.z,chasing,roaming,timer:chaseLeft});\n}\n'''
+          if '</script>' not in s:
+              raise SystemExit('No script terminator found')
+          s=s.replace('</script>',patch+'</script>',1)
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Stop Granny from mirroring player strafing'
+          git push
