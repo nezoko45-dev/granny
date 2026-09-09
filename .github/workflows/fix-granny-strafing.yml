@@ -13,27 +13,154 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch Granny AI
+
+      - name: Patch the actual module AI
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('index.html')
-          s=p.read_text(encoding='utf-8')
-          marker='function grannyMovementStrafeFix(){}'
-          if marker in s:
-              print('Patch already present')
-              raise SystemExit(0)
-          patch=r'''\n// Granny movement fix: use sampled chase targets instead of mirroring the player's strafe every frame.\nlet grannyChaseTarget=new THREE.Vector3();\nlet grannyTargetSampleClock=0;\nfunction grannyMovementStrafeFix(){}\nfunction ai(dt){\n  if(!isHost||!started)return;\n  const now=performance.now();\n  const d=distance();\n  const sees=lineOfSight();\n  const hears=hear();\n  if((sees||hears)&&!player.hidden){\n    chasing=true;\n    chaseLeft=11;\n  }\n  if(chasing){\n    chaseLeft-=dt;\n    if(chaseLeft<=0){\n      chasing=false;\n      roaming=true;\n      randomRoamTarget();\n    }\n  }\n  if(!chasing){\n    if(!roaming||Math.hypot(granny.position.x-roamTarget.x,granny.position.z-roamTarget.z)<.7){\n      roaming=true;\n      randomRoamTarget();\n    }\n    grannyChaseTarget.copy(roamTarget);\n  }else{\n    grannyTargetSampleClock-=dt;\n    const movedEnough=Math.hypot(camera.position.x-grannyChaseTarget.x,camera.position.z-grannyChaseTarget.z)>1.75;\n    if(grannyTargetSampleClock<=0||movedEnough){\n      grannyChaseTarget.set(camera.position.x,0,camera.position.z);\n      grannyTargetSampleClock=.55;\n    }\n  }\n  pathClock-=dt;\n  if(pathClock<=0||!path.length||pathIndex>=path.length){\n    path=astar(granny.position,grannyChaseTarget);\n    pathIndex=0;\n    pathClock=.35;\n  }\n  const node=path[pathIndex];\n  if(node){\n    const dx=node.x-granny.position.x,dz=node.z-granny.position.z,len=Math.hypot(dx,dz);\n    if(len<.45){\n      pathIndex++;\n    }else{\n      const speed=chasing?4.2:1.65;\n      granny.position.x+=dx/len*speed*dt;\n      granny.position.z+=dz/len*speed*dt;\n      granny.rotation.y=Math.atan2(dx,dz);\n      animateGrannyWalking(true,dt);\n    }\n  }else{\n    animateGrannyWalking(false,dt);\n  }\n  if(d<1.25&&!player.hidden&&!player.gameOver){\n    player.gameOver=true;\n    chasing=false;\n    roaming=true;\n    randomRoamTarget();\n    setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000);\n  }\n  sendAll({type:'granny',x:granny.position.x,z:granny.position.z,chasing,roaming,timer:chaseLeft});\n}\n'''
-          if '</script>' not in s:
-              raise SystemExit('No script terminator found')
-          s=s.replace('</script>',patch+'</script>',1)
-          p.write_text(s,encoding='utf-8')
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          # Remove the broken patch that was accidentally inserted into the
+          # external PeerJS <script src=...> tag. Inline code there is ignored.
+          peer_open = '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js">'
+          peer_clean = '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>'
+          if peer_open in s:
+              a = s.find(peer_open)
+              b = s.find('</script>', a)
+              if b < 0:
+                  raise SystemExit('PeerJS script has no closing tag')
+              bad_block = s[a:b+len('</script>')]
+              if 'grannyMovementStrafeFix' in bad_block:
+                  s = s[:a] + peer_clean + s[b+len('</script>'):]
+
+          module = s.find('<script type="module">')
+          if module < 0:
+              raise SystemExit('Module script not found')
+          start = s.find('function ai(dt){', module)
+          if start < 0:
+              raise SystemExit('Actual module ai(dt) not found')
+
+          # Find the matching closing brace of the real ai() function.
+          depth = 0
+          end = None
+          quote = None
+          escape = False
+          line_comment = False
+          block_comment = False
+          i = start
+          while i < len(s):
+              ch = s[i]
+              nx = s[i+1] if i + 1 < len(s) else ''
+              if line_comment:
+                  if ch == '\n': line_comment = False
+              elif block_comment:
+                  if ch == '*' and nx == '/':
+                      block_comment = False
+                      i += 1
+              elif quote:
+                  if escape:
+                      escape = False
+                  elif ch == '\\':
+                      escape = True
+                  elif ch == quote:
+                      quote = None
+              else:
+                  if ch == '/' and nx == '/':
+                      line_comment = True
+                      i += 1
+                  elif ch == '/' and nx == '*':
+                      block_comment = True
+                      i += 1
+                  elif ch in "'\"`":
+                      quote = ch
+                  elif ch == '{':
+                      depth += 1
+                  elif ch == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = i + 1
+                          break
+              i += 1
+          if end is None:
+              raise SystemExit('Could not find end of actual ai(dt)')
+
+          new_ai = r'''function ai(dt){
+            if(!isHost||!started)return;
+            const d=distance();
+            const sees=lineOfSight();
+            const hears=hear();
+            if((sees||hears)&&!player.hidden){chasing=true;chaseLeft=11;}
+            if(chasing){chaseLeft-=dt;if(chaseLeft<=0){chasing=false;roaming=true;randomRoamTarget();}}
+
+            // Granny follows a sampled destination, not the player's current
+            // lateral velocity. This prevents A/D strafing from being copied.
+            if(!granny.userData.chaseTarget)granny.userData.chaseTarget=new THREE.Vector3();
+            if(granny.userData.targetClock===undefined)granny.userData.targetClock=0;
+            const target=granny.userData.chaseTarget;
+            if(!chasing){
+              if(!roaming||Math.hypot(granny.position.x-roamTarget.x,granny.position.z-roamTarget.z)<.7){roaming=true;randomRoamTarget();}
+              target.copy(roamTarget);
+              granny.userData.targetClock=0;
+            }else{
+              granny.userData.targetClock-=dt;
+              if(granny.userData.targetClock<=0){
+                target.set(camera.position.x,0,camera.position.z);
+                granny.userData.targetClock=.7;
+              }
+            }
+
+            pathClock-=dt;
+            if(pathClock<=0||!path.length||pathIndex>=path.length){
+              path=astar(granny.position,target);
+              pathIndex=0;
+              pathClock=.35;
+            }
+            const node=path[pathIndex];
+            if(node){
+              const dx=node.x-granny.position.x,dz=node.z-granny.position.z,len=Math.hypot(dx,dz);
+              if(len<.45)pathIndex++;
+              else{
+                const speed=chasing?4.2:1.65;
+                granny.position.x+=dx/len*speed*dt;
+                granny.position.z+=dz/len*speed*dt;
+                granny.rotation.y=Math.atan2(dx,dz);
+                animateGrannyWalking(true,dt);
+              }
+            }else animateGrannyWalking(false,dt);
+
+            if(d<1.25&&!player.hidden&&!player.gameOver){
+              player.gameOver=true;
+              chasing=false;
+              roaming=true;
+              randomRoamTarget();
+              setTimeout(()=>{if(player.gameOver)respawnPlayer()},3000);
+            }
+            sendAll({type:'granny',x:granny.position.x,z:granny.position.z,chasing,roaming,timer:chaseLeft});
+          }'''
+
+          s = s[:start] + new_ai + s[end:]
+
+          # Hard validation: exactly one real ai(), no stale bad patch marker,
+          # and the AI is inside the module script.
+          if s.count('function ai(dt){') != 1:
+              raise SystemExit('Validation failed: ai(dt) count is not 1')
+          if 'grannyMovementStrafeFix' in s:
+              raise SystemExit('Validation failed: stale strafing patch remains')
+          if peer_open in s:
+              raise SystemExit('Validation failed: malformed PeerJS tag remains')
+          if s.find('function ai(dt){') < module:
+              raise SystemExit('Validation failed: ai() is outside module script')
+
+          p.write_text(s, encoding='utf-8')
+          print('Validated Granny AI patch successfully')
           PY
+
       - name: Commit patch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
           git diff --cached --quiet && exit 0
-          git commit -m 'Stop Granny from mirroring player strafing'
+          git commit -m 'Fix Granny strafe mirroring'
           git push
