@@ -6,8 +6,13 @@ import { randomUUID } from 'node:crypto';
 const PORT = process.env.PORT || 3000;
 const peers = new Map();
 const server=http.createServer(async(req,res)=>{
-  if(req.url==='/'||req.url==='/index.html'){
-    try{const html=await readFile(new URL('./index.html',import.meta.url));res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(html)}catch{res.writeHead(500);res.end('Could not load index.html')}
+  if(req.url==='/'||req.url==='/index.html'||req.url==='/backend-peer.js'){
+    try{
+      const file=req.url==='/backend-peer.js'?'./backend-peer.js':'./index.html';
+      let body=await readFile(new URL(file,import.meta.url),'utf8');
+      if(file==='./index.html') body=body.replace('https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js','/backend-peer.js');
+      res.writeHead(200,{'content-type':file.endsWith('.js')?'text/javascript; charset=utf-8':'text/html; charset=utf-8','cache-control':'no-store'});res.end(body);
+    }catch{res.writeHead(500);res.end('Could not load game files')}
     return;
   }
   if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,players:peers.size}));return;}
@@ -17,8 +22,7 @@ const wss=new WebSocketServer({server,path:'/ws'});
 function send(ws,msg){if(ws.readyState===1)ws.send(JSON.stringify(msg))}
 function announceLeave(id){for(const p of peers.values())send(p.ws,{type:'left',id})}
 wss.on('connection',ws=>{
-  let id=randomUUID();
-  const peer={id,ws};peers.set(id,peer);send(ws,{type:'welcome',id});
+  let id=randomUUID();const peer={id,ws};peers.set(id,peer);
   ws.on('message',raw=>{try{
     const m=JSON.parse(raw.toString());
     if(m.type==='register'){
@@ -35,4 +39,4 @@ wss.on('connection',ws=>{
   ws.on('close',()=>{if(peers.get(id)===peer){peers.delete(id);announceLeave(id)}});
   ws.on('error',()=>{if(peers.get(id)===peer){peers.delete(id);announceLeave(id)}});
 });
-server.listen(PORT,()=>console.log(`Granny multiplayer backend listening on port ${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>console.log(`Granny multiplayer backend listening on port ${PORT}`));
