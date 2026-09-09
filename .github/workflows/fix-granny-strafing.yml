@@ -18,21 +18,20 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
 
-          # Remove the broken patch that was accidentally inserted into the
-          # external PeerJS <script src=...> tag. Inline code there is ignored.
-          peer_open = '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js">'
-          peer_clean = '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>'
-          if peer_open in s:
-              a = s.find(peer_open)
-              b = s.find('</script>', a)
-              if b < 0:
-                  raise SystemExit('PeerJS script has no closing tag')
-              bad_block = s[a:b+len('</script>')]
-              if 'grannyMovementStrafeFix' in bad_block:
-                  s = s[:a] + peer_clean + s[b+len('</script>'):]
+          # Remove the old broken patch only if it was actually inserted inside
+          # the external PeerJS script. A valid self-closed PeerJS tag is allowed.
+          peer_pattern = r'<script\s+src=["\']https://unpkg\.com/peerjs@1\.5\.4/dist/peerjs\.min\.js["\']>(.*?)</script>'
+          matches = list(re.finditer(peer_pattern, s, flags=re.S | re.I))
+          for m in reversed(matches):
+              block = m.group(0)
+              if 'grannyMovementStrafeFix' in block:
+                  clean = '<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>'
+                  s = s[:m.start()] + clean + s[m.end():]
 
           module = s.find('<script type="module">')
           if module < 0:
@@ -141,13 +140,18 @@ jobs:
 
           s = s[:start] + new_ai + s[end:]
 
-          # Hard validation: exactly one real ai(), no stale bad patch marker,
-          # and the AI is inside the module script.
+          # Validation: exactly one real AI function, no stale patch marker,
+          # and no malformed (unclosed) PeerJS script containing patch code.
           if s.count('function ai(dt){') != 1:
               raise SystemExit('Validation failed: ai(dt) count is not 1')
           if 'grannyMovementStrafeFix' in s:
               raise SystemExit('Validation failed: stale strafing patch remains')
-          if peer_open in s:
+          malformed_peer = re.search(
+              r'<script\s+src=["\']https://unpkg\.com/peerjs@1\.5\.4/dist/peerjs\.min\.js["\']>(?!\s*</script>)',
+              s,
+              flags=re.I
+          )
+          if malformed_peer:
               raise SystemExit('Validation failed: malformed PeerJS tag remains')
           if s.find('function ai(dt){') < module:
               raise SystemExit('Validation failed: ai() is outside module script')
