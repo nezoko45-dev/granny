@@ -36,12 +36,19 @@ wall(-20,-25,10,1); wall(20,-25,10,1);
 cube(-7,1,-2,4,2,2,mats.wood); cube(7,1,-2,4,2,2,mats.wood);
 cube(-18,1,-18,4,2,2,mats.wood); cube(18,1,-18,4,2,2,mats.wood); cube(0,1,-29,5,2,2,mats.wood);
 
+// Granny is a proper articulated character now: feet, legs and arms move while she walks.
 const granny = new THREE.Group(); scene.add(granny);
-const body=new THREE.Mesh(new THREE.CylinderGeometry(.58,.82,2.1,12),mats.granny); body.position.y=1.05; granny.add(body);
-const head=new THREE.Mesh(new THREE.SphereGeometry(.46,16,12),mats.skin); head.position.y=2.45; granny.add(head);
+const body=new THREE.Mesh(new THREE.CylinderGeometry(.58,.82,2.1,12),mats.granny); body.position.y=1.05; body.castShadow=true; granny.add(body);
+const head=new THREE.Mesh(new THREE.SphereGeometry(.46,16,12),mats.skin); head.position.y=2.45; head.castShadow=true; granny.add(head);
 const hair=new THREE.Mesh(new THREE.SphereGeometry(.5,16,12,0,Math.PI*2,0,Math.PI*.62),mats.hair); hair.position.y=2.7; hair.scale.set(1.08,1.12,1.08); granny.add(hair);
 for(const x of [-.15,.15]){const e=new THREE.Mesh(new THREE.SphereGeometry(.055,8,8),mats.red);e.position.set(x,2.5,.4);granny.add(e)}
 const mouth=new THREE.Mesh(new THREE.BoxGeometry(.38,.12,.05),mats.skin); mouth.position.set(0,2.29,.43); granny.add(mouth);
+function limb(w,h,d,mat){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.castShadow=true;return m}
+const leftLeg=new THREE.Group(), rightLeg=new THREE.Group(), leftArm=new THREE.Group(), rightArm=new THREE.Group();
+leftLeg.position.set(-.28,.82,0); rightLeg.position.set(.28,.82,0); leftArm.position.set(-.7,1.55,0); rightArm.position.set(.7,1.55,0);
+const ll=limb(.3,.95,.34,mats.granny), rl=limb(.3,.95,.34,mats.granny), la=limb(.28,1.05,.3,mats.granny), ra=limb(.28,1.05,.3,mats.granny);
+ll.position.y=-.45; rl.position.y=-.45; la.position.y=-.52; ra.position.y=-.52;
+leftLeg.add(ll); rightLeg.add(rl); leftArm.add(la); rightArm.add(ra); granny.add(leftLeg,rightLeg,leftArm,rightArm);
 
 const me = {x:0,z:18};
 let socket, myId=null, keys={}, started=false, lastSent=0, remotePlayers=new Map();
@@ -60,8 +67,8 @@ function connect(){
     if(m.type==='state'){
       countEl.textContent=`PLAYERS ${m.players}/16`;
       statusEl.textContent=m.granny.state==='CHASE'?'GRANNY IS CHASING YOU':'GRANNY IS ROAMING';
-      granny.position.set(m.granny.x,0,m.granny.z);
-      for(const p of m.playersState){if(p.id===myId)continue;remote(p.id).position.set(p.x,0,p.z);worldPlayers.set(p.id,p)}
+      granny.userData.targetX=m.granny.x; granny.userData.targetZ=m.granny.z;
+      for(const p of m.playersState){if(p.id===myId)continue;const g=remote(p.id);g.userData.targetX=p.x;g.userData.targetZ=p.z;worldPlayers.set(p.id,p)}
       for(const id of remotePlayers.keys())if(!m.playersState.some(p=>p.id===id))removeRemote(id);
     }
   };
@@ -77,4 +84,36 @@ document.addEventListener('keydown',e=>{keys[e.code]=true;if(['KeyW','KeyA','Key
 document.addEventListener('keyup',e=>keys[e.code]=false);document.addEventListener('blur',()=>keys={});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 connect();
-let last=performance.now();function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;move(dt);if(now-lastSent>50){sendPosition();lastSent=now}renderer.render(scene,camera);requestAnimationFrame(frame)}requestAnimationFrame(frame);
+let last=performance.now();
+function animateCharacter(dt){
+  const tx=granny.userData.targetX, tz=granny.userData.targetZ;
+  if(Number.isFinite(tx)&&Number.isFinite(tz)){
+    const dx=tx-granny.position.x,dz=tz-granny.position.z,dist=Math.hypot(dx,dz);
+    const smoothing=1-Math.exp(-18*dt);
+    granny.position.x=THREE.MathUtils.lerp(granny.position.x,tx,smoothing);
+    granny.position.z=THREE.MathUtils.lerp(granny.position.z,tz,smoothing);
+    const moving=dist>.035;
+    if(moving){
+      const desired=Math.atan2(dx,dz);
+      let delta=THREE.MathUtils.euclideanModulo(desired-granny.rotation.y+Math.PI,Math.PI*2)-Math.PI;
+      granny.rotation.y+=delta*Math.min(1,12*dt);
+      granny.userData.walkTime=(granny.userData.walkTime||0)+dt*(granny.userData.state==='CHASE'?9:5.5);
+    }
+    const t=granny.userData.walkTime||0;
+    const movingNow=dist>.035;
+    const stride=movingNow?Math.sin(t)*.55:0;
+    leftLeg.rotation.x=stride; rightLeg.rotation.x=-stride;
+    leftArm.rotation.x=-stride*.72; rightArm.rotation.x=stride*.72;
+    body.position.y=1.05+(movingNow?Math.abs(Math.sin(t*2))*.035:0);
+  }
+}
+function animateRemote(dt){
+  const smoothing=1-Math.exp(-18*dt);
+  for(const g of remotePlayers.values()){
+    const tx=g.userData.targetX,tz=g.userData.targetZ;if(!Number.isFinite(tx)||!Number.isFinite(tz))continue;
+    const dx=tx-g.position.x,dz=tz-g.position.z,dist=Math.hypot(dx,dz);g.position.x=THREE.MathUtils.lerp(g.position.x,tx,smoothing);g.position.z=THREE.MathUtils.lerp(g.position.z,tz,smoothing);
+    if(dist>.03)g.rotation.y+= (THREE.MathUtils.euclideanModulo(Math.atan2(dx,dz)-g.rotation.y+Math.PI,Math.PI*2)-Math.PI)*Math.min(1,12*dt);
+  }
+}
+function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;move(dt);animateCharacter(dt);animateRemote(dt);if(now-lastSent>50){sendPosition();lastSent=now}renderer.render(scene,camera);requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
