@@ -6,18 +6,27 @@ on:
     paths:
       - 'server.js'
       - 'package.json'
+      - 'index.html'
+      - 'game.js'
       - '.github/workflows/build-server.yml'
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
-      - run: npx @yao-pkg/pkg server.js --targets node20-win-x64 --output GrannyServer.exe
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Bundle server for Windows EXE
+        run: npx esbuild server.js --bundle --platform=node --format=cjs --outfile=server.bundle.cjs
+      - name: Build GrannyServer.exe
+        run: npx @yao-pkg/pkg server.bundle.cjs --targets node20-win-x64 --output GrannyServer.exe
       - name: Package server bundle
         shell: pwsh
         run: |
@@ -25,7 +34,20 @@ jobs:
           Copy-Item GrannyServer.exe dist/GrannyServer.exe
           Copy-Item index.html dist/index.html
           Copy-Item game.js dist/game.js
-      - uses: actions/upload-artifact@v4
+          @'
+          GRANNY MULTIPLAYER SERVER
+
+          Keep GrannyServer.exe, index.html, and game.js together.
+          Run GrannyServer.exe, then open http://localhost:3000.
+          Other LAN players can use http://YOUR-PC-IP:3000.
+
+          Maximum players: 16
+          Granny chase distance: 45
+          Pathfinding: A*
+          '@ | Set-Content dist/README.txt
+      - name: Upload Windows server
+        uses: actions/upload-artifact@v4
         with:
           name: GrannyServer-Windows
           path: dist/
+          if-no-files-found: error
