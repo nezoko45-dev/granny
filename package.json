@@ -1,8 +1,16 @@
 {
   "name": "granny-3d-multiplayer",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "scripts": {"start": "node server.js"},
-  "dependencies": {"ws": "^8.18.3"}
+  "scripts": {
+    "start": "node server.js",
+    "build:exe": "yao-pkg server.js --targets node20-win-x64 --output GrannyServer.exe"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.9.0"
+  }
 }
