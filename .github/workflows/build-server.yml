@@ -1,0 +1,31 @@
+name: Build Granny Server EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'server.js'
+      - 'package.json'
+      - '.github/workflows/build-server.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npx @yao-pkg/pkg server.js --targets node20-win-x64 --output GrannyServer.exe
+      - name: Package server bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item GrannyServer.exe dist/GrannyServer.exe
+          Copy-Item index.html dist/index.html
+          Copy-Item game.js dist/game.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GrannyServer-Windows
+          path: dist/
